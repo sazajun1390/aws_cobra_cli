@@ -1,0 +1,241 @@
+variable "test1_bucket_name" {
+  description = "The name of the S3 bucket"
+  type        = string
+}
+
+variable "test1_iam_user_name" {
+  description = "The name of the IAM user for read-only access"
+  type        = string
+}
+
+variable "test1_region" {
+  description = "AWS region"
+  type        = string
+  default     = "ap-northeast-1"
+}
+
+
+variable "test2_bucket_name" {
+  description = "The name of the S3 bucket"
+  type        = string
+}
+
+variable "test2_iam_user_name" {
+  description = "The name of the IAM user for read-only access"
+  type        = string
+}
+
+variable "test2_region" {
+  description = "AWS region"
+  type        = string
+  default     = "ap-northeast-3"
+}
+
+
+provider "aws" {
+  alias = "test1"
+  region = var.test1_region
+}
+
+provider "aws" {
+  alias = "test2"
+  region = var.test2_region
+}
+
+# S3バケットの作成
+resource "aws_s3_bucket" "test1_bucket" {
+  provider = aws.test1
+  bucket = var.test1_bucket_name 
+
+  tags = {
+    Name        = var.test1_bucket_name
+    Environment = "Development"
+  }
+}
+
+resource "aws_s3_bucket" "test2_bucket" {
+  provider = aws.test2
+  bucket = var.test2_bucket_name 
+
+  tags = {
+    Name        = var.test2_bucket_name
+    Environment = "Development"
+  }
+}
+
+# バケットACLの設定
+resource "aws_s3_bucket_ownership_controls" "test1_bucket_ownership" {
+  provider = aws.test1
+  bucket = aws_s3_bucket.test1_bucket.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "test2_bucket_ownership" {
+  provider = aws.test2
+  bucket = aws_s3_bucket.test2_bucket.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+# パブリックアクセスブロック設定の無効化
+resource "aws_s3_bucket_public_access_block" "test1_public_access_block" {
+  provider = aws.test1
+  bucket = aws_s3_bucket.test1_bucket.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_public_access_block" "test2_public_access_block" {
+  provider = aws.test2
+  bucket = aws_s3_bucket.test2_bucket.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_acl" "test1_bucket_acl" {
+  provider = aws.test1
+  depends_on = [aws_s3_bucket_ownership_controls.test1_bucket_ownership]
+  bucket = aws_s3_bucket.test1_bucket.id
+  acl    = "public-read"
+}
+
+resource "aws_s3_bucket_acl" "test2_bucket_acl" {
+  provider = aws.test2
+  depends_on = [aws_s3_bucket_ownership_controls.test2_bucket_ownership]
+  bucket = aws_s3_bucket.test2_bucket.id
+  acl    = "public-read"
+}
+
+# バケットポリシーの設定
+resource "aws_s3_bucket_policy" "test1_read_only_policy" {
+  provider = aws.test1
+  depends_on = [aws_s3_bucket_public_access_block.test1_public_access_block]
+  bucket = aws_s3_bucket.test1_bucket.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.test1_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+resource "aws_s3_bucket_policy" "test2_read_only_policy" {
+  provider = aws.test2
+  depends_on = [aws_s3_bucket_public_access_block.test2_public_access_block]
+  bucket = aws_s3_bucket.test2_bucket.id
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      { 
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.test2_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+# IAMユーザーの作成
+resource "aws_iam_user" "test1_read_only_user" {
+  provider = aws.test1
+  name = var.test1_iam_user_name
+}
+
+resource "aws_iam_user" "test2_read_only_user" {
+  provider = aws.test2
+  name = var.test2_iam_user_name
+}
+
+# IAMポリシーの作成 (S3 Read-Only)
+resource "aws_iam_policy" "test1_s3_read_only_policy" {
+  provider = aws.test1
+  name        = "${var.test1_iam_user_name}_S3ReadOnly"
+  description = "Read-only access to the S3 bucket"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = ["s3:GetObject"],
+        Resource = "${aws_s3_bucket.test1_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_policy" "test2_s3_read_only_policy" {
+  provider = aws.test2
+  name        = "${var.test2_iam_user_name}_S3ReadOnly"
+  description = "Read-only access to the S3 bucket"
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = ["s3:GetObject"],
+        Resource = "${aws_s3_bucket.test2_bucket.arn}/*"
+      }
+    ]
+  })
+}
+
+# IAMポリシーをユーザーにアタッチ
+resource "aws_iam_user_policy_attachment" "attach_test1_read_only_policy" {
+  provider = aws.test1
+  user       = aws_iam_user.test1_read_only_user.name
+  policy_arn = aws_iam_policy.test1_s3_read_only_policy.arn
+}
+
+resource "aws_iam_user_policy_attachment" "attach_test2_read_only_policy" {
+  provider = aws.test2
+  user       = aws_iam_user.test2_read_only_user.name
+  policy_arn = aws_iam_policy.test2_s3_read_only_policy.arn
+}
+
+# IAMアクセスキーの作成
+resource "aws_iam_access_key" "test1_access_key" {
+  provider = aws.test1
+  user = aws_iam_user.test1_read_only_user.name
+}
+
+resource "aws_iam_access_key" "test2_access_key" {
+  provider = aws.test2
+  user = aws_iam_user.test2_read_only_user.name
+}
+
+output "test1_access_key_id" {
+  value = aws_iam_access_key.test1_access_key.id
+  sensitive = true
+}
+
+output "test2_secret_access_key" {
+  value = aws_iam_access_key.test1_access_key.secret
+  sensitive = true
+}
+
+output "test1_bucket_name" {
+  value = aws_s3_bucket.test1_bucket.bucket
+}
+
+output "test2_bucket_name" {
+  value = aws_s3_bucket.test2_bucket.bucket
+}
+
+
